@@ -1,0 +1,244 @@
+# 自动编译 MediaTek MT6762/MT6765 (ALPS 4.19.191) 内核
+#
+# 触发方式：
+#   - push 到任意分支（提交信息里带 [skip ci] 可跳过）
+#   - Pull Request
+#   - 手动：Actions -> Build kernel -> Run workflow（可选 defconfig 等参数）
+#   - 打 v* 标签：编译完成后自动发 Release 并附上 zip
+#
+# 产物：Actions 运行页底部的 Artifacts 里下载，包含
+#   Image.gz / Image / System.map / config / dtb / modules / BUILD_INFO.txt
+
+name: Build kernel
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: "内核配置（arch/arm64/configs 下的文件名）"
+        type: choice
+        required: true
+        default: k65v1_64_bsp_defconfig
+        options:
+          - k65v1_64_bsp_defconfig
+          - k65v1_64_bsp_debug_defconfig
+          - k79v1_64_defconfig
+          - k79v1_64_debug_defconfig
+          - mediatek_debug_defconfig
+          - defconfig
+      debug_info:
+        description: "保留调试符号 (CONFIG_DEBUG_INFO)，编译更慢、体积更大"
+        type: boolean
+        default: false
+      build_dtbs:
+        description: "同时尝试编译设备树 (dtbs)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARCH: arm64
+  CROSS_COMPILE: aarch64-linux-gnu-
+  CROSS_CC: aarch64-linux-gnu-gcc-10
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  KBUILD_BUILD_USER: github
+  KBUILD_BUILD_HOST: actions
+
+jobs:
+  build:
+    name: Compile kernel
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Resolve build parameters
+        id: params
+        run: |
+          set -euo pipefail
+
+          defconfig="${{ inputs.defconfig }}"
+          [ -n "$defconfig" ] || defconfig="k65v1_64_bsp_defconfig"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            debug_info="${{ inputs.debug_info }}"
+            build_dtbs="${{ inputs.build_dtbs }}"
+          else
+            debug_info="false"
+            build_dtbs="true"
+          fi
+          [ -n "$debug_info" ] || debug_info="false"
+          [ -n "$build_dtbs" ] || build_dtbs="true"
+
+          short_sha="${GITHUB_SHA:0:7}"
+          kernel_name="kernel-${defconfig%_defconfig}-$(date -u +%Y%m%d)-${short_sha}"
+
+          echo "defconfig=$defconfig" >> "$GITHUB_OUTPUT"
+          echo "debug_info=$debug_info" >> "$GITHUB_OUTPUT"
+          echo "build_dtbs=$build_dtbs" >> "$GITHUB_OUTPUT"
+          echo "kernel_name=$kernel_name" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "DEFCONFIG=$defconfig"
+            echo "DEBUG_INFO=$debug_info"
+            echo "BUILD_DTBS=$build_dtbs"
+            echo "KERNEL_NAME=$kernel_name"
+          } >> "$GITHUB_ENV"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/lib/jvm || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev xz-utils cpio \
+            zip unzip ccache gcc-10-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          echo "--- toolchain ---"
+          ccache --max-size=2G
+          aarch64-linux-gnu-gcc-10 --version | head -1
+          make --version | head -1
+          ccache --version | head -1
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ steps.params.outputs.defconfig }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ steps.params.outputs.defconfig }}-
+            ccache-
+
+      - name: Patch vendor tree for GCC
+        run: |
+          # 内核把 inline 展开成 always_inline，而下面几处声明没有函数体，
+          # GCC 调用时会报 "function body not available"。去掉多余的 inline 即可。
+          sed -i 's/^inline void uclamp_se_set(/void uclamp_se_set(/' kernel/sched/sched.h
+          sed -i 's/^inline void ksm_flock(/void ksm_flock(/' include/linux/keyslot-manager.h
+          sed -i 's/^inline void blk_crypto_flock(/void blk_crypto_flock(/' include/linux/blk-crypto.h
+          sed -i 's/^inline u32 spi_read_reg(/u32 spi_read_reg(/' drivers/misc/mediatek/cmdq/bridge/cmdq-bdg.h
+          sed -i 's/^inline s32 spi_write_reg(/s32 spi_write_reg(/' drivers/misc/mediatek/cmdq/bridge/cmdq-bdg.h
+
+          # MTK 各子目录在 Makefile 里写死了 -Werror，新编译器的新告警会直接中断编译。
+          # 只去掉构建脚本里的 -Werror，不改任何代码逻辑。
+          grep -rlZ -I -- "-Werror" drivers sound | tr '\0' '\n' \
+            | grep -E '(Makefile|Kbuild\.mk|Kbuild)$' \
+            | xargs -r sed -i 's/ *-Werror[^[:space:]]*//g'
+
+          # 这个树里 mt6765 的 dts 没登记到 dtb-y，补一行让 make dtbs 能产出它
+          makefile_dts=arch/arm64/boot/dts/mediatek/Makefile
+          grep -q 'mt6765\.dtb' "$makefile_dts" \
+            || sed -i '1a dtb-$(CONFIG_ARCH_MEDIATEK) += mt6765.dtb' "$makefile_dts"
+
+          # 兜底：其余目录如果也有 -Werror，统一不再把告警当错误
+          echo "KCFLAGS_EXTRA=-Wno-error" >> "$GITHUB_ENV"
+
+      - name: Configure kernel
+        run: |
+          make -j"$(nproc)" ARCH=arm64 O=out "$DEFCONFIG"
+
+          if [ "$DEBUG_INFO" != "true" ]; then
+            # 只影响调试符号，不影响生成的 Image
+            scripts/config --file out/.config \
+              -d DEBUG_INFO -d DEBUG_INFO_DWARF4 -d DEBUG_INFO_REDUCED -d GDB_SCRIPTS
+          fi
+          make -j"$(nproc)" ARCH=arm64 O=out olddefconfig
+
+      - name: Build kernel
+        run: |
+          export KBUILD_BUILD_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          make -j"$(nproc)" ARCH=arm64 O=out \
+            CC="ccache $CROSS_CC" \
+            KCFLAGS="$KCFLAGS_EXTRA" \
+            Image.gz modules
+
+      - name: Build device trees (best effort)
+        if: steps.params.outputs.build_dtbs == 'true'
+        run: |
+          make -j"$(nproc)" ARCH=arm64 O=out CC="ccache $CROSS_CC" KCFLAGS="$KCFLAGS_EXTRA" dtbs \
+            || echo "::warning::make dtbs 失败，继续打包已生成的内容"
+
+      - name: Package artifacts
+        id: package
+        run: |
+          set -euo pipefail
+          name="$KERNEL_NAME"
+          root="dist/$name"
+          mkdir -p "$root"
+
+          cp out/arch/arm64/boot/Image.gz "$root/Image.gz"
+          cp out/arch/arm64/boot/Image    "$root/Image"
+          cp out/System.map               "$root/System.map"
+          cp out/.config                  "$root/config"
+
+          # 模块（如果有）
+          while IFS= read -r ko; do
+            mkdir -p "$root/modules/$(dirname "${ko#out/}")"
+            cp "$ko" "$root/modules/${ko#out/}"
+          done < <(find out -name '*.ko' -type f)
+
+          # 设备树
+          while IFS= read -r dtb; do
+            mkdir -p "$root/dtb"
+            cp "$dtb" "$root/dtb/"
+          done < <(find out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) 2>/dev/null || true)
+
+          cat > "$root/BUILD_INFO.txt" <<EOF
+          kernel    : $(make -s ARCH=arm64 O=out kernelrelease)
+          defconfig : $DEFCONFIG
+          commit    : $GITHUB_SHA
+          ref       : $GITHUB_REF
+          compiler  : $("$CROSS_CC" --version | head -1)
+          built at  : $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          builder   : GitHub Actions ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
+          EOF
+
+          (cd dist && zip -r -9 "$name.zip" "$name")
+          echo "zip=dist/$name.zip" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### 内核编译完成 :white_check_mark:"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 配置 | \`$DEFCONFIG\` |"
+            echo "| 提交 | \`${GITHUB_SHA:0:7}\` |"
+            echo "| 产物 | \`$name.zip\` |"
+            echo "| 调试符号 | $DEBUG_INFO |"
+            echo ""
+            echo "Image.gz 大小：$(du -h "$root/Image.gz" | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.params.outputs.kernel_name }}
+          path: dist/${{ steps.params.outputs.kernel_name }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.zip }}
+          generate_release_notes: true
