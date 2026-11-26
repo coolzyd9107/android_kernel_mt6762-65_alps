@@ -40,7 +40,7 @@ define FILTER_DRV
 ifeq ($(wildcard $(IMGSENSOR_DRIVER_PATH)/$(MTK_PLATFORM)/camera_project/$(ARCH_MTK_PROJECT)/$(1)),)
 ifeq ($(wildcard $(IMGSENSOR_DRIVER_PATH)/$(MTK_PLATFORM)/$(1)),)
 ifeq ($(wildcard $(IMGSENSOR_DRIVER_PATH)/common/$(COMMON_VERSION)/$(1)),)
-$(warning imgsensor: skipping $(1) - no source directory)
+# no driver directory anywhere: leave it out, reported after FILTER_DRV
 else
 common_drv += ../common/$(COMMON_VERSION)/$(1)/
 endif
@@ -54,6 +54,9 @@ endef
 
 
 $(foreach drv,$(subst $\",,$(CONFIG_CUSTOM_KERNEL_IMGSENSOR)),$(eval $(call FILTER_DRV,$(drv))))
+# A requested sensor that resolved to no source directory is reported here, once,
+# after every FILTER_DRV has actually run.
+$(foreach drv,$(subst $\",,$(CONFIG_CUSTOM_KERNEL_IMGSENSOR)),$(if $(or $(filter ../common/$(COMMON_VERSION)/$(drv)/,$(common_drv)),$(filter $(drv)/,$(platform_drv)),$(filter ./camera_project/$(ARCH_MTK_PROJECT)/$(drv)/,$(project_drv))),,$(warning imgsensor: $(drv) requested but no source directory found - skipped)))
 
 ifneq ($(common_drv),)
 $(info imgsensor drv by common $(common_drv))

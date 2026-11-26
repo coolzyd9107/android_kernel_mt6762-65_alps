@@ -20,7 +20,20 @@ enum LCM_DSI_MODE_CON lcm_dsi_mode;
 #define LCD_HW_ID_STATUS_FLOAT 0x02
 #define LCD_HW_ID_STATUS_ERROR  0x03
 
+#if defined(ST7701S_BOE)
+extern struct LCM_DRIVER st7701s_boe_lcm_drv;
+#endif
+#if defined(AXS_BVO40WVQ_INCELL)
+extern struct LCM_DRIVER axs_bvo40wvq_incell_lcm_drv;
+#endif
+
 struct LCM_DRIVER *lcm_driver_list[] = {
+#if defined(ST7701S_BOE)
+	&st7701s_boe_lcm_drv,
+#endif
+#if defined(AXS_BVO40WVQ_INCELL)
+	&axs_bvo40wvq_incell_lcm_drv,
+#endif
 #if defined(NT36672AH_HDP_DSI_VDO_TCL_CSOT)
 	&nt36672ah_hdp_dsi_vdo_tcl_csot_lcm_drv,
 #endif
