@@ -64,19 +64,25 @@ KSU_SRC := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
 LOCAL_GIT_EXISTS := $(shell test -e $(KSU_SRC)/../.git && echo 1 || echo 0)
 
+# 本仓库把 BakaSU 直接内联在 drivers/kernelsu（不是 git submodule），
+# 没有 .git 时跳过子模块检查，版本号用下面的固定提交数代替。
 ifeq ($(LOCAL_GIT_EXISTS),0)
-$(info -- Can't find $(REPO_NAME) git submodule!)
-$(info -- If you are using bazel to build this kernel,)
-$(info -- Please go to Kbuild and change KSU_SRC to the absolute path of the KSU kernel folder.)
-$(error You should use $(REPO_NAME) as a git submodule instead of copying code directly)
+$(info -- $(REPO_NAME): 使用内联源码，跳过 submodule 检查)
 endif
 
 ifdef KBUILD_EXTMOD
 include $(KSU_SRC)/tools/ddk_compatible.mk
 endif
 
+ifeq ($(LOCAL_GIT_EXISTS),1)
 $(shell cd $(KSU_SRC); [ -f ../.git/shallow ] && $(GIT_BIN) fetch --unshallow)
 KSU_LOCAL_VERSION := $(shell cd $(KSU_SRC); $(GIT_BIN) rev-list --count HEAD)
+endif
+
+# 内联源码快照对应的 BakaSU 提交数（2026-11 拉取时为 4585）
+ifeq ($(strip $(KSU_LOCAL_VERSION)),)
+KSU_LOCAL_VERSION := 4585
+endif
 KSU_VERSION := $(shell expr 30000 + $(KSU_LOCAL_VERSION) + 700)
 
 KSU_TAG_NAME    := $(shell cd $(KSU_SRC); $(GIT_BIN) describe --abbrev=0 --tags 2>/dev/null || echo "v4.1.0")
