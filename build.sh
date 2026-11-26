@@ -8,6 +8,7 @@
 #    bash build.sh --clean               先删 out/
 #    bash build.sh --no-ak3              只出裸内核包
 #    bash build.sh --debug               保留调试符号
+#    bash build.sh --no-bakasu           不启用 BakaSU（默认启用）
 #
 #  第一次使用先跑：bash envsetup.sh
 # ============================================================
@@ -21,6 +22,7 @@ JOBS="$(nproc)"
 DO_CLEAN=0
 MAKE_AK3=1
 KEEP_DEBUG=0
+BAKASU=1
 OUT="out"
 
 usage() { sed -n '2,14p' "$0"; }
@@ -32,6 +34,7 @@ while [ $# -gt 0 ]; do
 		--clean) DO_CLEAN=1; shift ;;
 		--no-ak3) MAKE_AK3=0; shift ;;
 		--debug) KEEP_DEBUG=1; shift ;;
+		--no-bakasu) BAKASU=0; shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) echo "未知参数：$1" >&2; usage; exit 1 ;;
 	esac
@@ -87,6 +90,12 @@ apply_build_fixes
 echo "==> 配置：$DEFCONFIG"
 make -j"$JOBS" ARCH=arm64 O="$OUT" "$DEFCONFIG"
 
+if [ "$BAKASU" = "1" ]; then
+	scripts/config --file "$OUT/.config" -e KSU -e KSU_MANUAL_HOOK -e KALLSYMS_ALL
+else
+	scripts/config --file "$OUT/.config" -d KSU -d KSU_MANUAL_HOOK -d KSU_TRACEPOINT_HOOK
+fi
+
 if [ "$KEEP_DEBUG" != "1" ]; then
 	scripts/config --file "$OUT/.config" \
 		-d DEBUG_INFO -d DEBUG_INFO_DWARF4 -d DEBUG_INFO_REDUCED -d GDB_SCRIPTS
@@ -97,15 +106,11 @@ echo "==> 编译（-j$JOBS，$(basename "$CC")）"
 export KBUILD_BUILD_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 make -j"$JOBS" ARCH=arm64 O="$OUT" CC="$CC_WRAP" KCFLAGS="-Wno-error" Image.gz
 
-echo "==> 构建设备树"
-make -j"$JOBS" ARCH=arm64 O="$OUT" CC="$CC_WRAP" KCFLAGS="-Wno-error" dtbs \
-	|| echo "!! dtbs 构建有失败，继续打包内核部分"
-
 echo "==> 打包"
 VERSION="$(make -s ARCH=arm64 O="$OUT" kernelrelease)"
 SHORT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
 NAME="kernel-${DEFCONFIG%_defconfig}-$(date +%Y%m%d)-$SHORT_SHA"
-if grep -q '^CONFIG_KSU=y' "$CONFIG_FILE"; then
+if [ "$BAKASU" = "1" ]; then
 	NAME="BakaSU-$NAME"
 fi
 KVER="${VERSION%%.*}.$(echo "${VERSION#*.}" | cut -d. -f1)"
@@ -117,13 +122,6 @@ if [ "$MAKE_AK3" = "1" ] && [ -f AnyKernel3/anykernel.sh ]; then
 	rm -rf "$ak3"
 	cp -a AnyKernel3 "$ak3"
 	cp "$OUT/arch/arm64/boot/Image.gz" "$ak3/Image.gz"
-
-	mkdir -p "$ak3/dtb"
-	for f in bf61.dtb bf61-overlay.dtbo mt6765.dtb; do
-		if [ -f "$OUT/arch/arm64/boot/dts/mediatek/$f" ]; then
-			cp "$OUT/arch/arm64/boot/dts/mediatek/$f" "$ak3/dtb/"
-		fi
-	done
 
 	# 只校验内核版本、不校验机型
 	sed -i "s|^kernel.string=.*|kernel.string=$NAME ($VERSION)|" "$ak3/anykernel.sh"
@@ -147,12 +145,6 @@ else
 	cp "$OUT/arch/arm64/boot/Image.gz" "$raw/Image.gz"
 	cp "$OUT/System.map" "$raw/System.map"
 	cp "$OUT/.config" "$raw/config"
-	mkdir -p "$raw/dtb"
-	for f in bf61.dtb bf61-overlay.dtbo mt6765.dtb; do
-		if [ -f "$OUT/arch/arm64/boot/dts/mediatek/$f" ]; then
-			cp "$OUT/arch/arm64/boot/dts/mediatek/$f" "$raw/dtb/"
-		fi
-	done
 	{
 		echo "kernel    : $VERSION"
 		echo "defconfig : $DEFCONFIG"
