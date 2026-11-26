@@ -50,6 +50,7 @@ concurrency:
 env:
   ARCH: arm64
   CROSS_COMPILE: aarch64-linux-gnu-
+  CC: aarch64-linux-gnu-gcc-10
   CROSS_CC: aarch64-linux-gnu-gcc-10
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   KBUILD_BUILD_USER: github
@@ -113,9 +114,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             bc bison flex libssl-dev libelf-dev xz-utils cpio \
             zip unzip ccache gcc-10-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          # 有些脚本会直接调用 $(CROSS_COMPILE)gcc（不带版本后缀）
+          command -v aarch64-linux-gnu-gcc >/dev/null \
+            || sudo ln -sf "$(command -v aarch64-linux-gnu-gcc-10)" /usr/local/bin/aarch64-linux-gnu-gcc
+
           echo "--- toolchain ---"
           ccache --max-size=2G
-          aarch64-linux-gnu-gcc-10 --version | head -1
+          aarch64-linux-gnu-gcc --version | head -1
           make --version | head -1
           ccache --version | head -1
 
