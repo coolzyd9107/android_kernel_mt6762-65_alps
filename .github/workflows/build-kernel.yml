@@ -7,7 +7,7 @@
 #   - 打 v* 标签：编译完成后自动发 Release 并附上 zip
 #
 # 产物：Actions 运行页底部的 Artifacts 里下载
-#   - 仓库里有 anykernel3/ 时：可直接刷入的 AnyKernel3 zip（默认只校验内核版本，不校验机型）
+#   - 仓库里有 AnyKernel3/ 时：可直接刷入的 AnyKernel3 zip（默认只校验内核版本，不校验机型）
 #   - 否则退回裸内核包：Image.gz / System.map / config / dtb / BUILD_INFO.txt
 
 name: Build kernel
@@ -215,12 +215,12 @@ jobs:
             } > "$1"
           }
 
-          if [ -f anykernel3/anykernel.sh ]; then
+          if [ -f AnyKernel3/anykernel.sh ]; then
             kind="AnyKernel3"
             ak3="$RUNNER_TEMP/ak3-$name"
             rm -rf "$ak3"
             mkdir -p "$ak3"
-            cp -a anykernel3/. "$ak3/"
+            cp -a AnyKernel3/. "$ak3/"
             cp out/arch/arm64/boot/Image.gz "$ak3/Image.gz"
 
             # 把包名/内核版本写进 anykernel.sh（只校验内核版本，不校验机型）
