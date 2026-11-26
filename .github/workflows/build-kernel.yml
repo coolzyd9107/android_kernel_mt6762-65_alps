@@ -34,7 +34,7 @@ on:
         type: boolean
         default: true
       bakasu:
-        description: "启用 BakaSU（KernelSU + manual hook）"
+        description: "启用 BakaSU"
         type: boolean
         default: true
       release_tag:
