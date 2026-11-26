@@ -1,10 +1,8 @@
 # 自动编译 MediaTek MT6762/MT6765 (ALPS 4.19.191) 内核
 #
-# 触发方式：
-#   - push 到任意分支（提交信息里带 [skip ci] 可跳过）
-#   - Pull Request
-#   - 手动：Actions -> Build kernel -> Run workflow（可选 defconfig 等参数）
-#   - 打 v* 标签：编译完成后自动发 Release 并附上 zip
+# 触发方式：只有手动（Actions -> Build kernel -> Run workflow）
+#   - 可选 defconfig / 调试符号 / 是否编 dtbs
+#   - 填了 release_tag 就顺便发一个 Release，并在下载后附上 zip
 #
 # 产物：Actions -> Artifacts，下载得到的 zip 就是可直接刷入的包
 #   - 仓库里有 AnyKernel3/ 时：刷机包内容原样上传，GitHub 打的 zip 即 AK3 包
@@ -13,11 +11,6 @@
 name: Build kernel
 
 on:
-  push:
-    branches: ["**"]
-    tags: ["v*"]
-  pull_request:
-    branches: ["**"]
   workflow_dispatch:
     inputs:
       defconfig:
@@ -41,6 +34,11 @@ on:
         description: "同时尝试编译设备树 (dtbs)"
         type: boolean
         default: true
+      release_tag:
+        description: "可选：填了就把产物发到这个 tag 的 Release（如 v1.0-bf61）"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -275,8 +273,10 @@ jobs:
           retention-days: 30
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag }}
+          name: ${{ inputs.release_tag }}
           files: ${{ steps.package.outputs.zip }}
           generate_release_notes: true
