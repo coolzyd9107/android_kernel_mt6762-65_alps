@@ -6,8 +6,8 @@
 #   - 手动：Actions -> Build kernel -> Run workflow（可选 defconfig 等参数）
 #   - 打 v* 标签：编译完成后自动发 Release 并附上 zip
 #
-# 产物：Actions 运行页底部的 Artifacts 里下载
-#   - 仓库里有 AnyKernel3/ 时：可直接刷入的 AnyKernel3 zip（默认只校验内核版本，不校验机型）
+# 产物：Actions -> Artifacts，下载得到的 zip 就是可直接刷入的包
+#   - 仓库里有 AnyKernel3/ 时：刷机包内容原样上传，GitHub 打的 zip 即 AK3 包
 #   - 否则退回裸内核包：Image.gz / System.map / config / dtb / BUILD_INFO.txt
 
 name: Build kernel
@@ -196,11 +196,9 @@ jobs:
         run: |
           set -euo pipefail
           name="$KERNEL_NAME"
-          mkdir -p dist
-
-          version="$(make -s ARCH=arm64 O=out kernelrelease)"
           short_sha="${GITHUB_SHA:0:7}"
-          display="${name} (${version})"
+          version="$(make -s ARCH=arm64 O=out kernelrelease)"
+          display="$name ($version)"
           kver="${version%%.*}.$(echo "${version#*.}" | cut -d. -f1)"
 
           write_info() {
@@ -215,24 +213,21 @@ jobs:
             } > "$1"
           }
 
+          # 目录内容 = 刷机包内容；Artifacts 直接传这个目录，
+          # GitHub 打包出来的 zip 就是可刷的 AK3 包，不用再套一层。
+          root="dist/$name"
+          rm -rf "$root"
+          mkdir -p "$root"
+
           if [ -f AnyKernel3/anykernel.sh ]; then
             kind="AnyKernel3"
-            ak3="$RUNNER_TEMP/ak3-$name"
-            rm -rf "$ak3"
-            mkdir -p "$ak3"
-            cp -a AnyKernel3/. "$ak3/"
-            cp out/arch/arm64/boot/Image.gz "$ak3/Image.gz"
-
-            # 把包名/内核版本写进 anykernel.sh（只校验内核版本，不校验机型）
-            sed -i "s|^kernel.string=.*|kernel.string=$display|" "$ak3/anykernel.sh"
-            sed -i "s|^EXPECTED_KVER=.*|EXPECTED_KVER=$kver;|" "$ak3/anykernel.sh"
-
-            write_info "$ak3/BUILD_INFO.txt"
-            ( cd "$ak3" && zip -r -9 "$GITHUB_WORKSPACE/dist/$name.zip" * >/dev/null )
+            cp -a AnyKernel3/. "$root/"
+            cp out/arch/arm64/boot/Image.gz "$root/Image.gz"
+            # 只校验内核版本、不校验机型
+            sed -i "s|^kernel.string=.*|kernel.string=$display|" "$root/anykernel.sh"
+            sed -i "s|^EXPECTED_KVER=.*|EXPECTED_KVER=$kver;|" "$root/anykernel.sh"
           else
             kind="raw"
-            root="dist/$name"
-            mkdir -p "$root"
             cp out/arch/arm64/boot/Image.gz "$root/Image.gz"
             cp out/System.map               "$root/System.map"
             cp out/.config                  "$root/config"
@@ -240,10 +235,12 @@ jobs:
               mkdir -p "$root/dtb"
               cp "$dtb" "$root/dtb/"
             done < <(find out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) 2>/dev/null || true)
-            write_info "$root/BUILD_INFO.txt"
-            ( cd dist && zip -r -9 "$name.zip" "$name" >/dev/null )
           fi
 
+          write_info "$root/BUILD_INFO.txt"
+
+          # 给 tag 发 Release 用（发布资产不会二次打包）
+          ( cd "$root" && zip -qr -9 "../$name.zip" . )
           echo "zip=dist/$name.zip" >> "$GITHUB_OUTPUT"
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
@@ -255,9 +252,11 @@ jobs:
             echo "| 配置 | \`$DEFCONFIG\` |"
             echo "| 内核版本 | \`$version\` |"
             echo "| 提交 | \`$short_sha\` |"
-            echo "| 产物 | \`$name.zip\`（$kind）|"
+            echo "| 类型 | $kind |"
+            echo "| 产物 | \`$name.zip\` |"
             echo "| 调试符号 | $DEBUG_INFO |"
             echo ""
+            echo "Artifacts 里下载回来的 \`$name.zip\` 可以直接刷，不需要再解压或重打包。"
             echo "包大小：$(du -h "dist/$name.zip" | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -265,7 +264,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.params.outputs.kernel_name }}
-          path: ${{ steps.package.outputs.zip }}
+          path: dist/${{ steps.params.outputs.kernel_name }}
           if-no-files-found: error
           retention-days: 30
 
