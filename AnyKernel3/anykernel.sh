@@ -28,11 +28,11 @@ set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
 } # end attributes
 
 # boot shell variables
-# MTK 机型 boot 分区路径不统一，从常见路径里挑一个存在的
-BLOCK=/dev/block/platform/bootdevice/by-name/boot;
-[ -e /dev/block/bootdevice/by-name/boot ] && BLOCK=/dev/block/bootdevice/by-name/boot;
-[ -e /dev/block/by-name/boot ] && BLOCK=/dev/block/by-name/boot;
-IS_SLOT_DEVICE=0;
+# 交给 AK3 自己按名字找分区（MTK 路径不统一），并自动识别 A/B 槽位：
+#   A/B 机型 -> 读 ro.boot.slot_suffix / androidboot.slot_suffix，刷到 boot_a 或 boot_b
+#   非 A/B   -> 直接找 boot
+BLOCK=boot;
+IS_SLOT_DEVICE=auto;
 RAMDISK_COMPRESSION=auto;
 PATCH_VBMETA_FLAG=auto;
 
