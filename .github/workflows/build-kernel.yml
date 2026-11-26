@@ -17,14 +17,9 @@ on:
         description: "内核配置（arch/arm64/configs 下的文件名）"
         type: choice
         required: true
-        default: k65v1_64_bsp_defconfig
+        default: u1pro_defconfig
         options:
-          - k65v1_64_bsp_defconfig
-          - k65v1_64_bsp_debug_defconfig
-          - k79v1_64_defconfig
-          - k79v1_64_debug_defconfig
-          - mediatek_debug_defconfig
-          - defconfig
+          - u1pro_defconfig
       debug_info:
         description: "保留调试符号 (CONFIG_DEBUG_INFO)，编译更慢、体积更大"
         type: boolean
@@ -242,11 +237,20 @@ jobs:
             # 只校验内核版本、不校验机型
             sed -i "s|^kernel.string=.*|kernel.string=$display|" "$root/anykernel.sh"
             sed -i "s|^EXPECTED_KVER=.*|EXPECTED_KVER=$kver;|" "$root/anykernel.sh"
+
+            mkdir -p "$root/dtb"
+            for f in u1pro.dtb u1pro-overlay.dtbo mt6765.dtb; do
+              [ -f "out/arch/arm64/boot/dts/mediatek/$f" ] && cp "out/arch/arm64/boot/dts/mediatek/$f" "$root/dtb/"
+            done
           else
             kind="raw"
             cp out/arch/arm64/boot/Image.gz "$root/Image.gz"
             cp out/System.map               "$root/System.map"
             cp out/.config                  "$root/config"
+            mkdir -p "$root/dtb"
+            for f in u1pro.dtb u1pro-overlay.dtbo mt6765.dtb; do
+              [ -f "out/arch/arm64/boot/dts/mediatek/$f" ] && cp "out/arch/arm64/boot/dts/mediatek/$f" "$root/dtb/"
+            done
           fi
 
           write_info "$root/BUILD_INFO.txt"

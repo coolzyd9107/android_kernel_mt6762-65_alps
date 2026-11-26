@@ -106,6 +106,10 @@ echo "==> 编译（-j$JOBS，$(basename "$CC")）"
 export KBUILD_BUILD_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 make -j"$JOBS" ARCH=arm64 O="$OUT" CC="$CC_WRAP" KCFLAGS="-Wno-error" Image.gz
 
+echo "==> 构建设备树"
+make -j"$JOBS" ARCH=arm64 O="$OUT" CC="$CC_WRAP" KCFLAGS="-Wno-error" dtbs \
+	|| echo "!! dtbs 构建有失败，继续打包内核部分"
+
 echo "==> 打包"
 VERSION="$(make -s ARCH=arm64 O="$OUT" kernelrelease)"
 SHORT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
@@ -122,6 +126,13 @@ if [ "$MAKE_AK3" = "1" ] && [ -f AnyKernel3/anykernel.sh ]; then
 	rm -rf "$ak3"
 	cp -a AnyKernel3 "$ak3"
 	cp "$OUT/arch/arm64/boot/Image.gz" "$ak3/Image.gz"
+
+	mkdir -p "$ak3/dtb"
+	for f in u1pro.dtb u1pro-overlay.dtbo mt6765.dtb; do
+		if [ -f "$OUT/arch/arm64/boot/dts/mediatek/$f" ]; then
+			cp "$OUT/arch/arm64/boot/dts/mediatek/$f" "$ak3/dtb/"
+		fi
+	done
 
 	# 只校验内核版本、不校验机型
 	sed -i "s|^kernel.string=.*|kernel.string=$NAME ($VERSION)|" "$ak3/anykernel.sh"
@@ -145,6 +156,12 @@ else
 	cp "$OUT/arch/arm64/boot/Image.gz" "$raw/Image.gz"
 	cp "$OUT/System.map" "$raw/System.map"
 	cp "$OUT/.config" "$raw/config"
+	mkdir -p "$raw/dtb"
+	for f in u1pro.dtb u1pro-overlay.dtbo mt6765.dtb; do
+		if [ -f "$OUT/arch/arm64/boot/dts/mediatek/$f" ]; then
+			cp "$OUT/arch/arm64/boot/dts/mediatek/$f" "$raw/dtb/"
+		fi
+	done
 	{
 		echo "kernel    : $VERSION"
 		echo "defconfig : $DEFCONFIG"
