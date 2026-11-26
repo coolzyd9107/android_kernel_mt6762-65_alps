@@ -32,10 +32,18 @@ obj-y				+= ../common/$(COMMON_VERSION)/imgsensor_proc.o
 obj-y				+= ../common/$(COMMON_VERSION)/imgsensor_sensor_list.o
 
 
+# A sensor listed in CONFIG_CUSTOM_KERNEL_IMGSENSOR is only built when its
+# source directory actually exists. Without the innermost check a stale or
+# unsupported name fell through to common/ and make aborted with
+# "No rule to make target .../common/v1/<sensor>/Makefile".
 define FILTER_DRV
 ifeq ($(wildcard $(IMGSENSOR_DRIVER_PATH)/$(MTK_PLATFORM)/camera_project/$(ARCH_MTK_PROJECT)/$(1)),)
 ifeq ($(wildcard $(IMGSENSOR_DRIVER_PATH)/$(MTK_PLATFORM)/$(1)),)
+ifeq ($(wildcard $(IMGSENSOR_DRIVER_PATH)/common/$(COMMON_VERSION)/$(1)),)
+$(warning imgsensor: skipping $(1) - no source directory)
+else
 common_drv += ../common/$(COMMON_VERSION)/$(1)/
+endif
 else
 platform_drv += $(1)/
 endif
