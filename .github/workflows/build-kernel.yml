@@ -6,8 +6,9 @@
 #   - 手动：Actions -> Build kernel -> Run workflow（可选 defconfig 等参数）
 #   - 打 v* 标签：编译完成后自动发 Release 并附上 zip
 #
-# 产物：Actions 运行页底部的 Artifacts 里下载，包含
-#   Image.gz / Image / System.map / config / dtb / modules / BUILD_INFO.txt
+# 产物：Actions 运行页底部的 Artifacts 里下载
+#   - 仓库里有 anykernel3/ 时：可直接刷入的 AnyKernel3 zip（默认只校验内核版本，不校验机型）
+#   - 否则退回裸内核包：Image.gz / System.map / config / dtb / BUILD_INFO.txt
 
 name: Build kernel
 
@@ -86,13 +87,21 @@ jobs:
           [ -n "$debug_info" ] || debug_info="false"
           [ -n "$build_dtbs" ] || build_dtbs="true"
 
+          # defconfig 里开了 KSU 就当作 BakaSU 构建，产物名带标识
+          variant=""
+          if grep -q '^CONFIG_KSU=y' "arch/arm64/configs/${defconfig}" 2>/dev/null; then
+            variant="BakaSU"
+          fi
+
           short_sha="${GITHUB_SHA:0:7}"
           kernel_name="kernel-${defconfig%_defconfig}-$(date -u +%Y%m%d)-${short_sha}"
+          [ -n "$variant" ] && kernel_name="${variant}-${kernel_name}"
 
           echo "defconfig=$defconfig" >> "$GITHUB_OUTPUT"
           echo "debug_info=$debug_info" >> "$GITHUB_OUTPUT"
           echo "build_dtbs=$build_dtbs" >> "$GITHUB_OUTPUT"
           echo "kernel_name=$kernel_name" >> "$GITHUB_OUTPUT"
+          echo "variant=$variant" >> "$GITHUB_OUTPUT"
 
           {
             echo "DEFCONFIG=$defconfig"
@@ -174,7 +183,7 @@ jobs:
           make -j"$(nproc)" ARCH=arm64 O=out \
             CC="ccache $CROSS_CC" \
             KCFLAGS="$KCFLAGS_EXTRA" \
-            Image.gz modules
+            Image.gz
 
       - name: Build device trees (best effort)
         if: steps.params.outputs.build_dtbs == 'true'
@@ -187,57 +196,76 @@ jobs:
         run: |
           set -euo pipefail
           name="$KERNEL_NAME"
-          root="dist/$name"
-          mkdir -p "$root"
+          mkdir -p dist
 
-          cp out/arch/arm64/boot/Image.gz "$root/Image.gz"
-          cp out/arch/arm64/boot/Image    "$root/Image"
-          cp out/System.map               "$root/System.map"
-          cp out/.config                  "$root/config"
+          version="$(make -s ARCH=arm64 O=out kernelrelease)"
+          short_sha="${GITHUB_SHA:0:7}"
+          display="${name} (${version})"
+          kver="${version%%.*}.$(echo "${version#*.}" | cut -d. -f1)"
 
-          # 模块（如果有）
-          while IFS= read -r ko; do
-            mkdir -p "$root/modules/$(dirname "${ko#out/}")"
-            cp "$ko" "$root/modules/${ko#out/}"
-          done < <(find out -name '*.ko' -type f)
+          write_info() {
+            {
+              echo "kernel    : $version"
+              echo "defconfig : $DEFCONFIG"
+              echo "commit    : $GITHUB_SHA"
+              echo "ref       : $GITHUB_REF"
+              echo "compiler  : $("$CROSS_CC" --version | head -1)"
+              echo "built at  : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              echo "builder   : GitHub Actions ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            } > "$1"
+          }
 
-          # 设备树
-          while IFS= read -r dtb; do
-            mkdir -p "$root/dtb"
-            cp "$dtb" "$root/dtb/"
-          done < <(find out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) 2>/dev/null || true)
+          if [ -f anykernel3/anykernel.sh ]; then
+            kind="AnyKernel3"
+            ak3="$RUNNER_TEMP/ak3-$name"
+            rm -rf "$ak3"
+            mkdir -p "$ak3"
+            cp -a anykernel3/. "$ak3/"
+            cp out/arch/arm64/boot/Image.gz "$ak3/Image.gz"
 
-          cat > "$root/BUILD_INFO.txt" <<EOF
-          kernel    : $(make -s ARCH=arm64 O=out kernelrelease)
-          defconfig : $DEFCONFIG
-          commit    : $GITHUB_SHA
-          ref       : $GITHUB_REF
-          compiler  : $("$CROSS_CC" --version | head -1)
-          built at  : $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          builder   : GitHub Actions ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
-          EOF
+            # 把包名/内核版本写进 anykernel.sh（只校验内核版本，不校验机型）
+            sed -i "s|^kernel.string=.*|kernel.string=$display|" "$ak3/anykernel.sh"
+            sed -i "s|^EXPECTED_KVER=.*|EXPECTED_KVER=$kver;|" "$ak3/anykernel.sh"
 
-          (cd dist && zip -r -9 "$name.zip" "$name")
+            write_info "$ak3/BUILD_INFO.txt"
+            ( cd "$ak3" && zip -r -9 "$GITHUB_WORKSPACE/dist/$name.zip" * >/dev/null )
+          else
+            kind="raw"
+            root="dist/$name"
+            mkdir -p "$root"
+            cp out/arch/arm64/boot/Image.gz "$root/Image.gz"
+            cp out/System.map               "$root/System.map"
+            cp out/.config                  "$root/config"
+            while IFS= read -r dtb; do
+              mkdir -p "$root/dtb"
+              cp "$dtb" "$root/dtb/"
+            done < <(find out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) 2>/dev/null || true)
+            write_info "$root/BUILD_INFO.txt"
+            ( cd dist && zip -r -9 "$name.zip" "$name" >/dev/null )
+          fi
+
           echo "zip=dist/$name.zip" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
           {
-            echo "### 内核编译完成 :white_check_mark:"
+            echo "### 编译完成 :white_check_mark:"
             echo ""
             echo "| 项目 | 值 |"
             echo "| --- | --- |"
             echo "| 配置 | \`$DEFCONFIG\` |"
-            echo "| 提交 | \`${GITHUB_SHA:0:7}\` |"
-            echo "| 产物 | \`$name.zip\` |"
+            echo "| 内核版本 | \`$version\` |"
+            echo "| 提交 | \`$short_sha\` |"
+            echo "| 产物 | \`$name.zip\`（$kind）|"
             echo "| 调试符号 | $DEBUG_INFO |"
             echo ""
-            echo "Image.gz 大小：$(du -h "$root/Image.gz" | cut -f1)"
+            echo "包大小：$(du -h "dist/$name.zip" | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.params.outputs.kernel_name }}
-          path: dist/${{ steps.params.outputs.kernel_name }}
+          path: ${{ steps.package.outputs.zip }}
           if-no-files-found: error
           retention-days: 30
 
