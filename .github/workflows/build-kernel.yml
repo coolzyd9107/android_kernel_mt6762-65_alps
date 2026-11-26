@@ -26,6 +26,7 @@ on:
         required: true
         default: k65v1_64_bsp_defconfig
         options:
+          - bf61_defconfig
           - k65v1_64_bsp_defconfig
           - k65v1_64_bsp_debug_defconfig
           - k79v1_64_defconfig
@@ -226,15 +227,20 @@ jobs:
             # 只校验内核版本、不校验机型
             sed -i "s|^kernel.string=.*|kernel.string=$display|" "$root/anykernel.sh"
             sed -i "s|^EXPECTED_KVER=.*|EXPECTED_KVER=$kver;|" "$root/anykernel.sh"
+
+            mkdir -p "$root/dtb"
+            for f in bf61.dtb bf61-overlay.dtbo mt6765.dtb; do
+              [ -f "out/arch/arm64/boot/dts/mediatek/$f" ] && cp "out/arch/arm64/boot/dts/mediatek/$f" "$root/dtb/"
+            done
           else
             kind="raw"
             cp out/arch/arm64/boot/Image.gz "$root/Image.gz"
             cp out/System.map               "$root/System.map"
             cp out/.config                  "$root/config"
-            while IFS= read -r dtb; do
-              mkdir -p "$root/dtb"
-              cp "$dtb" "$root/dtb/"
-            done < <(find out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) 2>/dev/null || true)
+            mkdir -p "$root/dtb"
+            for f in bf61.dtb bf61-overlay.dtbo mt6765.dtb; do
+              [ -f "out/arch/arm64/boot/dts/mediatek/$f" ] && cp "out/arch/arm64/boot/dts/mediatek/$f" "$root/dtb/"
+            done
           fi
 
           write_info "$root/BUILD_INFO.txt"
