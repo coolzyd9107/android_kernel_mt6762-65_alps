@@ -19,7 +19,6 @@ on:
         required: true
         default: k65v1_64_bsp_defconfig
         options:
-          - bf61_defconfig
           - k65v1_64_bsp_defconfig
           - k65v1_64_bsp_debug_defconfig
           - k79v1_64_defconfig
@@ -34,8 +33,12 @@ on:
         description: "同时尝试编译设备树 (dtbs)"
         type: boolean
         default: true
+      bakasu:
+        description: "启用 BakaSU（KernelSU + manual hook）"
+        type: boolean
+        default: true
       release_tag:
-        description: "可选：填了就把产物发到这个 tag 的 Release（如 v1.0-bf61）"
+        description: "可选：填了就把产物发到这个 tag 的 Release"
         type: string
         required: false
         default: ""
@@ -86,9 +89,12 @@ jobs:
           [ -n "$debug_info" ] || debug_info="false"
           [ -n "$build_dtbs" ] || build_dtbs="true"
 
-          # defconfig 里开了 KSU 就当作 BakaSU 构建，产物名带标识
+          bakasu="${{ inputs.bakasu }}"
+          [ -n "$bakasu" ] || bakasu="true"
+
+          # BakaSU 开关决定产物名要不要带标识
           variant=""
-          if grep -q '^CONFIG_KSU=y' "arch/arm64/configs/${defconfig}" 2>/dev/null; then
+          if [ "$bakasu" = "true" ]; then
             variant="BakaSU"
           fi
 
@@ -99,6 +105,7 @@ jobs:
           echo "defconfig=$defconfig" >> "$GITHUB_OUTPUT"
           echo "debug_info=$debug_info" >> "$GITHUB_OUTPUT"
           echo "build_dtbs=$build_dtbs" >> "$GITHUB_OUTPUT"
+          echo "bakasu=$bakasu" >> "$GITHUB_OUTPUT"
           echo "kernel_name=$kernel_name" >> "$GITHUB_OUTPUT"
           echo "variant=$variant" >> "$GITHUB_OUTPUT"
 
@@ -106,6 +113,7 @@ jobs:
             echo "DEFCONFIG=$defconfig"
             echo "DEBUG_INFO=$debug_info"
             echo "BUILD_DTBS=$build_dtbs"
+            echo "BAKASU=$bakasu"
             echo "KERNEL_NAME=$kernel_name"
           } >> "$GITHUB_ENV"
 
@@ -169,6 +177,15 @@ jobs:
         run: |
           make -j"$(nproc)" ARCH=arm64 O=out "$DEFCONFIG"
 
+          # BakaSU 开关：打开时启用 KSU + manual hook，关闭时彻底不编
+          if [ "$BAKASU" = "true" ]; then
+            echo "==> 启用 BakaSU"
+            scripts/config --file out/.config -e KSU -e KSU_MANUAL_HOOK -e KALLSYMS_ALL
+          else
+            echo "==> 未启用 BakaSU"
+            scripts/config --file out/.config -d KSU -d KSU_MANUAL_HOOK -d KSU_TRACEPOINT_HOOK
+          fi
+
           if [ "$DEBUG_INFO" != "true" ]; then
             # 只影响调试符号，不影响生成的 Image
             scripts/config --file out/.config \
@@ -225,20 +242,11 @@ jobs:
             # 只校验内核版本、不校验机型
             sed -i "s|^kernel.string=.*|kernel.string=$display|" "$root/anykernel.sh"
             sed -i "s|^EXPECTED_KVER=.*|EXPECTED_KVER=$kver;|" "$root/anykernel.sh"
-
-            mkdir -p "$root/dtb"
-            for f in bf61.dtb bf61-overlay.dtbo mt6765.dtb; do
-              [ -f "out/arch/arm64/boot/dts/mediatek/$f" ] && cp "out/arch/arm64/boot/dts/mediatek/$f" "$root/dtb/"
-            done
           else
             kind="raw"
             cp out/arch/arm64/boot/Image.gz "$root/Image.gz"
             cp out/System.map               "$root/System.map"
             cp out/.config                  "$root/config"
-            mkdir -p "$root/dtb"
-            for f in bf61.dtb bf61-overlay.dtbo mt6765.dtb; do
-              [ -f "out/arch/arm64/boot/dts/mediatek/$f" ] && cp "out/arch/arm64/boot/dts/mediatek/$f" "$root/dtb/"
-            done
           fi
 
           write_info "$root/BUILD_INFO.txt"
